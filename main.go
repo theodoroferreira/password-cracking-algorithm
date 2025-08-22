@@ -88,12 +88,17 @@ func worker(ctx context.Context, password string, passwordLength int, start, end
 	}
 }
 
-func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int) []TestResult {
+func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int, customPassword string) []TestResult {
 	var results []TestResult
 	fmt.Println("\n--- Starting SINGLE-THREAD Performance Tests ---")
 
 	for runID := 1; runID <= numTestRuns; runID++ {
-		pwd := fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		var pwd string
+		if customPassword != "" {
+			pwd = customPassword
+		} else {
+			pwd = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		}
 
 		fmt.Printf("\n--- Single-Thread Run %d/%d ---\n", runID, numTestRuns)
 		fmt.Printf("Testing password: %s\n", pwd)
@@ -119,12 +124,17 @@ func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int
 	return results
 }
 
-func runMultiThreadTests(passwordLength int, searchSpace int64, numTestRuns int, numCores int) []TestResult {
+func runMultiThreadTests(passwordLength int, searchSpace int64, numTestRuns int, numCores int, customPassword string) []TestResult {
 	var results []TestResult
 	fmt.Printf("\n--- Starting MULTI-THREAD (%d cores) Performance Tests ---\n", numCores)
 
 	for runID := 1; runID <= numTestRuns; runID++ {
-		pwd := fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		var pwd string
+		if customPassword != "" {
+			pwd = customPassword
+		} else {
+			pwd = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		}
 
 		fmt.Printf("\n--- Multi-Thread Run %d/%d ---\n", runID, numTestRuns)
 		fmt.Printf("Testing password: %s\n", pwd)
@@ -210,20 +220,32 @@ func main() {
 		}
 	}
 
+	var customPassword string
+	fmt.Printf("\nEnter a specific %d-digit password to test (or press Enter for random passwords): ", passwordLength)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+
+	if _, err := strconv.Atoi(input); err == nil && len(input) == passwordLength {
+		customPassword = input
+		fmt.Printf("Using custom password for all runs: %s\n", customPassword)
+	} else {
+		fmt.Println("No valid custom password entered. A new random password will be generated for each run.")
+	}
+
 	fmt.Println("\nStarting password cracking performance comparison...")
 
 	switch mode {
 	case "1":
-		results := runSingleThreadTests(passwordLength, searchSpace, numTestRuns)
+		results := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, customPassword)
 		fileName := "performance_data_1_cores.csv"
 		saveResultsToCSV(results, fileName)
 	case "2":
-		results := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores)
+		results := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores, customPassword)
 		fileName := fmt.Sprintf("performance_data_%d_cores.csv", userNumCores)
 		saveResultsToCSV(results, fileName)
 	case "3":
-		singleThreadResults := runSingleThreadTests(passwordLength, searchSpace, numTestRuns)
-		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, maxCores)
+		singleThreadResults := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, customPassword)
+		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, maxCores, customPassword)
 		allResults := append(singleThreadResults, multiThreadResults...)
 		saveResultsToCSV(allResults, "performance_data.csv")
 	}
