@@ -88,34 +88,27 @@ func worker(ctx context.Context, password string, passwordLength int, start, end
 	}
 }
 
-func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int, customPassword string) []TestResult {
+func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int, passwordToCrack string) []TestResult {
 	var results []TestResult
 	fmt.Println("\n--- Starting SINGLE-THREAD Performance Tests ---")
 
 	for runID := 1; runID <= numTestRuns; runID++ {
-		var pwd string
-		if customPassword != "" {
-			pwd = customPassword
-		} else {
-			pwd = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
-		}
-
 		fmt.Printf("\n--- Single-Thread Run %d/%d ---\n", runID, numTestRuns)
-		fmt.Printf("Testing password: %s\n", pwd)
+		fmt.Printf("Testing password: %s\n", passwordToCrack)
 		runtime.GC()
 		var startMemStats runtime.MemStats
 		runtime.ReadMemStats(&startMemStats)
 
-		_, durationSingle := crackSingleThread(pwd, passwordLength, searchSpace)
+		_, durationSingle := crackSingleThread(passwordToCrack, passwordLength, searchSpace)
 
 		var endMemStats runtime.MemStats
 		runtime.ReadMemStats(&endMemStats)
 		memAllocSingle := float64(endMemStats.TotalAlloc-startMemStats.TotalAlloc) / (1024 * 1024)
-		guesses, _ := strconv.ParseInt(pwd, 10, 64)
+		guesses, _ := strconv.ParseInt(passwordToCrack, 10, 64)
 		gpsSingle := float64(guesses) / durationSingle.Seconds()
 
 		results = append(results, TestResult{
-			RunID: runID, AlgorithmType: "Single-Thread", Password: pwd,
+			RunID: runID, AlgorithmType: "Single-Thread", Password: passwordToCrack,
 			NumCores: 1, TimeToCrackSec: durationSingle.Seconds(),
 			GuessesPerSecond: gpsSingle, MemAllocMB: memAllocSingle,
 		})
@@ -124,34 +117,27 @@ func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int
 	return results
 }
 
-func runMultiThreadTests(passwordLength int, searchSpace int64, numTestRuns int, numCores int, customPassword string) []TestResult {
+func runMultiThreadTests(passwordLength int, searchSpace int64, numTestRuns int, numCores int, passwordToCrack string) []TestResult {
 	var results []TestResult
 	fmt.Printf("\n--- Starting MULTI-THREAD (%d cores) Performance Tests ---\n", numCores)
 
 	for runID := 1; runID <= numTestRuns; runID++ {
-		var pwd string
-		if customPassword != "" {
-			pwd = customPassword
-		} else {
-			pwd = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
-		}
-
 		fmt.Printf("\n--- Multi-Thread Run %d/%d ---\n", runID, numTestRuns)
-		fmt.Printf("Testing password: %s\n", pwd)
+		fmt.Printf("Testing password: %s\n", passwordToCrack)
 		runtime.GC()
 		var startMemStats runtime.MemStats
 		runtime.ReadMemStats(&startMemStats)
 
-		_, durationMulti := crackMultiThread(pwd, passwordLength, searchSpace, numCores)
+		_, durationMulti := crackMultiThread(passwordToCrack, passwordLength, searchSpace, numCores)
 
 		var endMemStats runtime.MemStats
 		runtime.ReadMemStats(&endMemStats)
 		memAllocMulti := float64(endMemStats.TotalAlloc-startMemStats.TotalAlloc) / (1024 * 1024)
-		guesses, _ := strconv.ParseInt(pwd, 10, 64)
+		guesses, _ := strconv.ParseInt(passwordToCrack, 10, 64)
 		gpsMulti := float64(guesses) / durationMulti.Seconds()
 
 		results = append(results, TestResult{
-			RunID: runID, AlgorithmType: "Multi-Thread", Password: pwd,
+			RunID: runID, AlgorithmType: "Multi-Thread", Password: passwordToCrack,
 			NumCores: numCores, TimeToCrackSec: durationMulti.Seconds(),
 			GuessesPerSecond: gpsMulti, MemAllocMB: memAllocMulti,
 		})
@@ -220,32 +206,33 @@ func main() {
 		}
 	}
 
-	var customPassword string
-	fmt.Printf("\nEnter a specific %d-digit password to test (or press Enter for random passwords): ", passwordLength)
+	var passwordToCrack string
+	fmt.Printf("\nEnter a specific %d-digit password to test (or press Enter for a random password): ", passwordLength)
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 
 	if _, err := strconv.Atoi(input); err == nil && len(input) == passwordLength {
-		customPassword = input
-		fmt.Printf("Using custom password for all runs: %s\n", customPassword)
+		passwordToCrack = input
+		fmt.Printf("Using custom password for all runs: %s\n", passwordToCrack)
 	} else {
-		fmt.Println("No valid custom password entered. A new random password will be generated for each run.")
+		passwordToCrack = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		fmt.Printf("No valid custom password entered. Using random password for all runs: %s\n", passwordToCrack)
 	}
 
 	fmt.Println("\nStarting password cracking performance comparison...")
 
 	switch mode {
 	case "1":
-		results := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, customPassword)
+		results := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, passwordToCrack)
 		fileName := "performance_data_1_cores.csv"
 		saveResultsToCSV(results, fileName)
 	case "2":
-		results := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores, customPassword)
+		results := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores, passwordToCrack)
 		fileName := fmt.Sprintf("performance_data_%d_cores.csv", userNumCores)
 		saveResultsToCSV(results, fileName)
 	case "3":
-		singleThreadResults := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, customPassword)
-		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, maxCores, customPassword)
+		singleThreadResults := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, passwordToCrack)
+		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, maxCores, passwordToCrack)
 		allResults := append(singleThreadResults, multiThreadResults...)
 		saveResultsToCSV(allResults, "performance_data.csv")
 	}
