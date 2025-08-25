@@ -24,12 +24,13 @@ profile.cov
 go.work
 go.work.sum
 *.mod
+*.sum
 
 # env file
 .env
 
 # Editor/IDE
-.idea/
+../.idea/
 
 # csv file
 *.csv

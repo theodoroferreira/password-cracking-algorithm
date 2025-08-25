@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/csv"
 	"fmt"
 	"log"
@@ -12,8 +11,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 type TestResult struct {
@@ -24,68 +24,6 @@ type TestResult struct {
 	TimeToCrackSec   float64
 	GuessesPerSecond float64
 	MemAllocMB       float64
-}
-
-func crackSingleThread(password string, passwordLength int, searchSpace int64) (bool, time.Duration) {
-	start := time.Now()
-	for i := int64(0); i < searchSpace; i++ {
-		guess := fmt.Sprintf("%0*d", passwordLength, i)
-		if guess == password {
-			return true, time.Since(start)
-		}
-	}
-	return false, time.Since(start)
-}
-
-func crackMultiThread(password string, passwordLength int, searchSpace int64, numCores int) (bool, time.Duration) {
-	start := time.Now()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var wg sync.WaitGroup
-	foundChan := make(chan bool, 1)
-	chunkSize := searchSpace / int64(numCores)
-
-	for i := 0; i < numCores; i++ {
-		wg.Add(1)
-		startRange := int64(i) * chunkSize
-		endRange := (int64(i) + 1) * chunkSize
-		if i == numCores-1 {
-			endRange = searchSpace
-		}
-		go func(start, end int64) {
-			defer wg.Done()
-			worker(ctx, password, passwordLength, start, end, foundChan, cancel)
-		}(startRange, endRange)
-	}
-
-	wg.Wait()
-	close(foundChan)
-	duration := time.Since(start)
-
-	if len(foundChan) > 0 {
-		return true, duration
-	}
-	return false, duration
-}
-
-func worker(ctx context.Context, password string, passwordLength int, start, end int64, foundChan chan<- bool, cancel context.CancelFunc) {
-	for i := start; i < end; i++ {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			guess := fmt.Sprintf("%0*d", passwordLength, i)
-			if guess == password {
-				select {
-				case foundChan <- true:
-				default:
-				}
-				cancel()
-				return
-			}
-		}
-	}
 }
 
 func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int, passwordToCrack string) []TestResult {
@@ -108,11 +46,15 @@ func runSingleThreadTests(passwordLength int, searchSpace int64, numTestRuns int
 		gpsSingle := float64(guesses) / durationSingle.Seconds()
 
 		results = append(results, TestResult{
-			RunID: runID, AlgorithmType: "Single-Thread", Password: passwordToCrack,
-			NumCores: 1, TimeToCrackSec: durationSingle.Seconds(),
-			GuessesPerSecond: gpsSingle, MemAllocMB: memAllocSingle,
+			RunID:            runID,
+			AlgorithmType:    "Single-Thread",
+			Password:         passwordToCrack,
+			NumCores:         1,
+			TimeToCrackSec:   durationSingle.Seconds(),
+			GuessesPerSecond: gpsSingle,
+			MemAllocMB:       memAllocSingle,
 		})
-		fmt.Printf("  -> Found in: %.4f seconds\n", durationSingle.Seconds())
+		fmt.Printf("  -> Found in: %.4f seconds; Guesses per second: %.4f", durationSingle.Seconds(), gpsSingle)
 	}
 	return results
 }
@@ -137,11 +79,15 @@ func runMultiThreadTests(passwordLength int, searchSpace int64, numTestRuns int,
 		gpsMulti := float64(guesses) / durationMulti.Seconds()
 
 		results = append(results, TestResult{
-			RunID: runID, AlgorithmType: "Multi-Thread", Password: passwordToCrack,
-			NumCores: numCores, TimeToCrackSec: durationMulti.Seconds(),
-			GuessesPerSecond: gpsMulti, MemAllocMB: memAllocMulti,
+			RunID:            runID,
+			AlgorithmType:    "Multi-Thread",
+			Password:         passwordToCrack,
+			NumCores:         numCores,
+			TimeToCrackSec:   durationMulti.Seconds(),
+			GuessesPerSecond: gpsMulti,
+			MemAllocMB:       memAllocMulti,
 		})
-		fmt.Printf("  -> Found in: %.4f seconds\n", durationMulti.Seconds())
+		fmt.Printf("  -> Found in: %.4f seconds; Guesses per second: %.4f\n", durationMulti.Seconds(), gpsMulti)
 	}
 	return results
 }
@@ -192,7 +138,7 @@ func main() {
 
 	var userNumCores int
 	maxCores := runtime.NumCPU()
-	if mode == "2" {
+	if mode == "2" || mode == "3" {
 		for {
 			fmt.Printf("\nEnter the number of cores to use (1-%d): ", maxCores)
 			input, _ := reader.ReadString('\n')
@@ -215,8 +161,22 @@ func main() {
 		passwordToCrack = input
 		fmt.Printf("Using custom password for all runs: %s\n", passwordToCrack)
 	} else {
-		passwordToCrack = fmt.Sprintf("%0*d", passwordLength, rand.Int63n(searchSpace))
+		minPasswordValue := searchSpace / 4
+		passwordToCrack = fmt.Sprintf("%0*d", passwordLength, minPasswordValue+rand.Int63n(searchSpace-minPasswordValue))
 		fmt.Printf("No valid custom password entered. Using random password for all runs: %s\n", passwordToCrack)
+	}
+
+	var awsCfg aws.Config
+	var uploadToS3Flag bool
+	fmt.Print("\nDo you want to upload the results to AWS S3? (y/n): ")
+	input, _ = reader.ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(input)) == "y" {
+		uploadToS3Flag = true
+		var err error
+		awsCfg, err = LoadAWSConfig()
+		if err != nil {
+			log.Fatalf("Could not load AWS configuration. Have you set your credentials? Error: %v", err)
+		}
 	}
 
 	fmt.Println("\nStarting password cracking performance comparison...")
@@ -225,28 +185,42 @@ func main() {
 	case "1":
 		results := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, passwordToCrack)
 		fileName := "performance_data_1_cores.csv"
-		saveResultsToCSV(results, fileName)
+		handleFileOutput(results, fileName, uploadToS3Flag, awsCfg)
 	case "2":
 		results := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores, passwordToCrack)
 		fileName := fmt.Sprintf("performance_data_%d_cores.csv", userNumCores)
-		saveResultsToCSV(results, fileName)
+		handleFileOutput(results, fileName, uploadToS3Flag, awsCfg)
 	case "3":
 		singleThreadResults := runSingleThreadTests(passwordLength, searchSpace, numTestRuns, passwordToCrack)
-		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, maxCores, passwordToCrack)
+		multiThreadResults := runMultiThreadTests(passwordLength, searchSpace, numTestRuns, userNumCores, passwordToCrack)
 		allResults := append(singleThreadResults, multiThreadResults...)
-		saveResultsToCSV(allResults, "performance_data.csv")
+		handleFileOutput(allResults, "performance_data.csv", uploadToS3Flag, awsCfg)
 	}
 
-	fmt.Println("\n✅ All tests complete.")
+	fmt.Println("\nAll tests complete.")
 }
 
-func saveResultsToCSV(results []TestResult, fileName string) {
-	if len(results) == 0 {
+func handleFileOutput(results []TestResult, fileName string, shouldUpload bool, awsCfg aws.Config) {
+	err := saveResultsToCSV(results, fileName)
+	if err != nil {
+		log.Printf("Error saving CSV file: %v", err)
 		return
+	}
+	if shouldUpload {
+		err = uploadToS3(fileName, awsCfg)
+		if err != nil {
+			log.Printf("Error uploading file to S3: %v", err)
+		}
+	}
+}
+
+func saveResultsToCSV(results []TestResult, fileName string) error {
+	if len(results) == 0 {
+		return nil
 	}
 	file, err := os.Create(fileName)
 	if err != nil {
-		log.Fatalf("Failed to create file %s: %v", fileName, err)
+		return fmt.Errorf("failed to create file %s: %w", fileName, err)
 	}
 	defer file.Close()
 
@@ -255,7 +229,7 @@ func saveResultsToCSV(results []TestResult, fileName string) {
 
 	header := []string{"RunID", "AlgorithmType", "Password", "NumCores", "TimeToCrackSec", "GuessesPerSecond", "MemAllocMB"}
 	if err := writer.Write(header); err != nil {
-		log.Fatalf("Failed to write header to %s: %v", fileName, err)
+		return fmt.Errorf("failed to write header to %s: %w", fileName, err)
 	}
 
 	for _, r := range results {
@@ -265,8 +239,9 @@ func saveResultsToCSV(results []TestResult, fileName string) {
 			fmt.Sprintf("%.2f", r.GuessesPerSecond), fmt.Sprintf("%.6f", r.MemAllocMB),
 		}
 		if err := writer.Write(row); err != nil {
-			log.Fatalf("Failed to write row to %s: %v", fileName, err)
+			return fmt.Errorf("failed to write row to %s: %w", fileName, err)
 		}
 	}
 	fmt.Printf("Performance data saved to %s\n", fileName)
+	return nil
 }
