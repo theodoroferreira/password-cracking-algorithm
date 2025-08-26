@@ -3,19 +3,27 @@ GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTIDY=$(GOCMD) mod tidy
 GORUN=$(GOCMD) run
+GOINIT=$(GOCMD) mod init
 
 BINARY_NAME=go-cracker
-BINARY_UNIX=$(BINARY_NAME)
+MODULE_NAME=go-cracker
 
 all: run
 
-.PHONY: all run build clean tidy
+.PHONY: all run build clean tidy init
 
-run:
+init:
+	@if [ ! -f go.mod ]; then \
+		echo "Initializing Go module..."; \
+		$(GOINIT) $(MODULE_NAME); \
+		$(GOTIDY); \
+	fi
+
+run: build
 	@echo "Running the application..."
-	$(GORUN) .
+	./$(BINARY_NAME)
 
-build:
+build: init
 	@echo "Building the application..."
 	$(GOBUILD) -o $(BINARY_NAME) .
 	@echo "Build complete: $(BINARY_NAME)"
@@ -30,4 +38,3 @@ tidy:
 	@echo "Tidying Go module dependencies..."
 	$(GOTIDY)
 	@echo "Dependencies tidied."
-
